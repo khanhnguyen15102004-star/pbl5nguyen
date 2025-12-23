@@ -1,0 +1,194 @@
+'use client'
+
+import { useState, useEffect } from "react";
+import { Paperclip, Send, Folder, X } from "lucide-react"; 
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { prompt } from "@/services/chatService"
+import { useRef } from "react";
+import { ContentLayout } from "@/components/dashboard/content-layout";
+import { show_detail_history_user } from "@/services/authService"
+import { LoadingIndicator } from "@/components/chat/LoadingIndicator";
+import { MessageBubble } from "@/components/chat/MessageBubble";
+
+interface Message {
+    role: "human" | "bot";
+    content: string;
+    image?: string; // URL hoặc base64 của hình ảnh
+    file_name?: string; // Đường dẫn file từ database
+  }
+export default function ChatContent({ params }: { params: { id: string } }) {
+    // console.log("Chat ID:", params.id);
+    const [showContent, setShowContent] = useState<boolean>(false);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [message, setMessage] = useState("");
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [isLoading, setIsLoading] = useState<boolean>(false);
+    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+      const fetchData = async () => {
+        try {
+          const response = await show_detail_history_user(params.id);
+          console.log("Chat history detail response:", response.data.history.messages);
+          setMessages(response.data.history.messages);
+        }
+        catch (error) {
+          console.error("Error fetching chat history:", error);
+        }
+      }
+      fetchData();
+    }, []);
+
+    useEffect(() => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+        }
+      }, [messages]);
+      
+  
+    const isSendDisabled = !message.trim() && !selectedFile;
+  
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files.length > 0) {
+        setSelectedFile(e.target.files[0]);
+      }
+    };
+  
+    const handleFileRemove = () => {
+      setSelectedFile(null);
+    };      
+
+    const handleSend = async () => {
+        if (isSendDisabled) return;
+        setShowContent(true);
+      
+        // Hiển thị tin nhắn người dùng ngay lập tức
+        const imageUrl = selectedFile ? URL.createObjectURL(selectedFile) : undefined;
+        const userMsg: Message = { 
+          role: "human", 
+          content: message.trim() || "Uploaded an image",
+          image: imageUrl
+        };
+        setMessages((prev) => [...prev, userMsg]);
+      
+        // Xóa input và file ngay lập tức (trước khi gọi API)
+        setMessage("");
+        setSelectedFile(null);
+
+        // Bật trạng thái loading
+        setIsLoading(true);
+      
+        // Chuẩn bị formData gửi lên server
+        const formData = new FormData();
+        formData.append("message", message.trim());
+        formData.append("chat_id", params.id);
+        if (selectedFile) {
+          formData.append("file", selectedFile);
+        }
+      
+        try {
+          // console.log("Sending prompt with params.id:", params.id);
+          const response = await prompt(formData);
+          console.log("Full response:", response);
+      
+          // let responseText = "Unable to process";
+          // if (response?.data?.prediction) {
+          //   responseText = `Identified as: ${response.data.prediction}`;
+          // } else if (response?.data?.response_rag) {
+          //   responseText = response.data.response_rag;
+          // }
+          let responseText = response.data.message || "Unable to process";
+          
+          const botMsg: Message = {
+            role: "bot",
+            content: responseText
+          };
+      
+          setMessages((prev) => [...prev, botMsg]);
+        } catch (error) {
+          console.error("Error sending data:", error);
+          const errorMsg: Message = {
+            role: "bot",
+            content: "Sorry, there was an error processing your request."
+          };
+          setMessages((prev) => [...prev, errorMsg]);
+        } finally {
+            // Tắt trạng thái loading
+            setIsLoading(false);
+        }
+      };
+
+
+    return (
+      <ContentLayout title="AskSnake">
+        <div className="flex-1 flex flex-col justify-center">
+            <main className="flex-1 flex flex-col gap-4 items-center">
+            {
+              (
+                  <div className="w-5/6 md:max-w-2xl flex flex-col gap-4 pb-22">
+                     {messages.map((msg, index) => (
+                        <div key={index} className={`flex ${msg.role === 'human' ? 'justify-end' : 'justify-start'} mb-3`}>
+                            <MessageBubble 
+                                role={msg.role}
+                                content={msg.content}
+                                image={msg.image}
+                                file_name={msg.file_name}
+                                isLatest={index === messages.length - 1}
+                            />
+                        </div>
+                     ))}
+                        {/* Scroll down */}
+                        <div ref={messagesEndRef} />
+                        {/* Hiển thị loading khi đang chờ phản hồi */}
+                        {isLoading && <LoadingIndicator />}
+                    </div>
+                )
+            }
+
+            {
+                (
+                    <div className="fixed bottom-0 flex justify-center mb-8 w-full"> 
+                        <div className="mt-2 flex w-5/6 md:max-w-2xl gap-2 border rounded-lg px-3 py-2 shadow-sm bg-white dark:bg-zinc-900">
+                            <Button variant="ghost" size="icon" type="button">
+                                <label className="cursor-pointer">
+                                    <Paperclip className="w-5 h-5 text-zinc-500" />
+                                    <input
+                                        type="file"
+                                        className="hidden"
+                                        onChange={handleFileChange}
+                                    />
+                                </label>
+                            </Button>
+                            <Input
+                                type="text"
+                                placeholder="Type your message..."
+                                value={message}
+                                onChange={(e) => setMessage(e.target.value)}
+                                onKeyPress={(e) => e.key === 'Enter' && !isSendDisabled && handleSend()}
+                                className="flex-1 border-none bg-transparent focus:outline-none text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 "
+                            />
+                            {selectedFile && (
+                                <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-md">
+                                    <Folder className="w-5 h-5 text-blue-500" />
+                                    <span className="text-sm text-zinc-900 dark:text-zinc-100 truncate max-w-[150px]">
+                                        {selectedFile.name}
+                                    </span>
+                                    <button onClick={handleFileRemove} className="text-red-500">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            )}
+                            <Button type="submit" variant="ghost" size="icon" onClick={handleSend} disabled={isSendDisabled}>
+                                <Send className="w-5 h-5 text-zinc-500" />
+                            </Button>
+                        </div>
+                    </div>  
+                )
+            }
+            </main>
+        </div>
+    </ContentLayout>
+    )
+
+}
